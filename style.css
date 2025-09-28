@@ -1,0 +1,31 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 20px;
+  background: #f9f9f9;
+}
+h1 {
+  color: #2c3e50;
+}
+button {
+  padding: 10px 15px;
+  margin: 10px 0;
+  cursor: pointer;
+}
+#ketqua {
+  margin-top: 20px;
+  padding: 10px;
+  background: #ecf0f1;
+  border-radius: 5px;
+}
+.status-hoanthanh {
+  color: green;
+  font-weight: bold;
+}
+.status-danglam {
+  color: orange;
+  font-weight: bold;
+}
+.status-chualam {
+  color: red;
+  font-weight: bold;
+}

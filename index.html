@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <title>Heuristic - Quan ly nhan su (Demo)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;margin:16px;background:#f7f9fc;color:#222}
+    h1{font-size:20px;margin-bottom:6px}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .card{background:white;border:1px solid #e1e5ea;border-radius:6px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+    label{display:block;font-size:13px;margin-bottom:4px}
+    input,select,button{padding:6px 8px;font-size:14px;border:1px solid #cbd5e1;border-radius:4px}
+    table{border-collapse:collapse;width:100%;margin-top:8px}
+    th,td{border:1px solid #e6eef6;padding:6px;text-align:center;font-size:13px}
+    th{background:#f0f6ff}
+    .small{font-size:12px;color:#555}
+    .status-done{color:green;font-weight:600}
+    .status-doing{color:orange;font-weight:600}
+    .status-none{color:#c0392b;font-weight:600}
+    #chart-wrap{max-width:780px;margin-top:12px}
+    .controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
+    textarea{width:100%;height:90px;padding:8px;font-family:monospace}
+    .col{flex:1;min-width:240px}
+  </style>
+</head>
+<body>
+  <h1>Ứng dụng: Áp dụng Heuristic vào quản lý nhân sự (quán ăn) — Demo</h1>
+
+  <div class="row">
+    <div class="card col">
+      <strong>1) Nhập danh sách nhân viên (mỗi dòng):</strong>
+      <div class="small">Format: Tên;theluc(0-1);kỹ năng theo công việc dưới dạng job1:score,job2:score,...</div>
+      <textarea id="inputEmployees" placeholder="Ví dụ:\nAn;0.8;Phuc vu:0.9,Nau an:0.4,Thu ngan:0.6\nBinh;0.6;Phuc vu:0.5,Nau an:0.8,Thu ngan:0.7"></textarea>
+      <button onclick="loadEmployees()">Load nhân viên</button>
+      <div id="empCount" class="small"></div>
+    </div>
+
+    <div class="card col">
+      <strong>2) Nhập danh sách công việc (mỗi dòng):</strong>
+      <div class="small">Format: Tên công việc;thoi_gian(phut)</div>
+      <textarea id="inputJobs" placeholder="Ví dụ:\nPhuc vu;10\nNau an;25\nThu ngan;8\nPha che;12"></textarea>
+      <button onclick="loadJobs()">Load công việc</button>
+      <div id="jobCount" class="small"></div>
+    </div>
+
+    <div class="card" style="min-width:260px">
+      <strong>3) Tham số Heuristic</strong>
+      <div class="small">Điểm(i,j) = x*(1/ThoiGian) + y*PhuHopKyNang + z*TheLuc</div>
+      <div style="margin-top:8px">
+        <label>Trọng số x (thời gian): <input id="wX" type="number" step="0.05" value="0.5" /></label>
+        <label>Trọng số y (kỹ năng): <input id="wY" type="number" step="0.05" value="0.3" /></label>
+        <label>Trọng số z (thể lực): <input id="wZ" type="number" step="0.05" value="0.2" /></label>
+      </div>
+      <div style="margin-top:8px">
+        <label>Ngưỡng kỹ năng bắt buộc (PhuHop &lt; threshold → cần huấn luyện): <input id="skillThresh" type="number" step="0.05" value="0.5" /></label>
+      </div>
+      <div style="margin-top:6px">
+        <button onclick="runAssignmentWeek()">Chạy phân công cho cả tuần (T2→T7)</button>
+      </div>
+      <div class="small" id="runInfo"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px">
+    <div class="card col" style="min-width:420px">
+      <strong>Kết quả phân công (mẫu cho Thứ hiện tại ở bảng)</strong>
+      <div id="assignmentTableWrap"></div>
+    </div>
+
+    <div class="card col" style="min-width:320px">
+      <strong>Thống kê & hiệu suất</strong>
+      <div id="summaryWrap"></div>
+    </div>
+  </div>
+
+  <div id="chart-wrap" class="card">
+    <canvas id="weekChart"></canvas>
+  </div>
+
+<script>
+/* ====== DATA MODELS ====== */
+let EMPLOYEES = []; // {name,theluc, skills: {job:score}}
+let JOBS = [];      // {name, timeMin}
+
+/* ====== HELPERS: parse input ====== */
+function parseEmployees(text){
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
+  const arr = [];
+  for(const ln of lines){
+    // Tên;theluc;jobA:0.8,jobB:0.5
+    const parts = ln.split(';').map(p=>p.trim());
+    if(parts.length < 3) continue;
+    const name = parts[0];
+    const theluc = Math.max(0, Math.min(1, parseFloat(parts[1]) || 0));
+    const skills = {};
+    parts[2].split(',').map(s=>s.trim()).filter(Boolean).forEach(pair=>{
+      const kv = pair.split(':').map(x=>x.trim());
+      if(kv.length==2) skills[kv[0]] = Math.max(0, Math.min(1, parseFloat(kv[1])||0));
+    });
+    arr.push({name, theluc, skills});
+  }
+  return arr;
+}
+function parseJobs(text){
+  const lines = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
+  const arr = [];
+  for(const ln of lines){
+    const parts = ln.split(';').map(p=>p.trim());
+    if(parts.length < 2) continue;
+    const name = parts[0];
+    const t = Math.max(1, parseFloat(parts[1]) || 1);
+    arr.push({name, timeMin: t});
+  }
+  return arr;
+}
+
+/* ====== UI actions ====== */
+function loadEmployees(){
+  const raw = document.getElementById('inputEmployees').value;
+  EMPLOYEES = parseEmployees(raw);
+  document.getElementById('empCount').innerText = "Đã load " + EMPLOYEES.length + " nhân viên";
+  renderAssignmentEmpty();
+}
+function loadJobs(){
+  const raw = document.getElementById('inputJobs').value;
+  JOBS = parseJobs(raw);
+  document.getElementById('jobCount').innerText = "Đã load " + JOBS.length + " công việc";
+  renderAssignmentEmpty();
+}
+
+/* ====== Heuristic core ====== */
+function computeScore(nv, job, params){
+  // normal hoá invTime theo tập jobs: invTime = 1/time
+  // but to keep comparable across jobs we will normalise by min/max invTime in current JOBS
+  const invTimes = JOBS.map(j=>1/j.timeMin);
+  const minInv = Math.min(...invTimes), maxInv = Math.max(...invTimes);
+  let inv = 1/job.timeMin;
+  let invNorm = (maxInv - minInv) < 1e-9 ? 1 : (inv - minInv) / (maxInv - minInv); // 0..1
+  const phuHop = nv.skills[job.name] !== undefined ? nv.skills[job.name] : 0; // 0..1
+  const theluc = nv.theluc; // 0..1
+
+  // Nếu kỹ năng < threshold, ta sẽ giảm nhẹ phuHop (mô phỏng cần huấn luyện)
+  let phuHopAdj = phuHop;
+  if(phuHop < params.skillThresh) phuHopAdj *= 0.7; // penalty or mark training
+
+  const score = params.x * invNorm + params.y * phuHopAdj + params.z * theluc;
+  return {score, invNorm, phuHop, phuHopAdj, theluc};
+}
+
+/* ====== Daily assignment (for one day) ====== */
+function assignForDay(){
+  // Copy employees status
+  const params = {
+    x: parseFloat(document.getElementById('wX').value) || 0.5,
+    y: parseFloat(document.getElementById('wY').value) || 0.3,
+    z: parseFloat(document.getElementById('wZ').value) || 0.2,
+    skillThresh: parseFloat(document.getElementById('skillThresh').value) || 0.5
+  };
+  const assignments = []; // {jobName, empName, score, phuHop}
+  const availableJobs = JOBS.slice(); // shallow copy
+  // For each job, find best employee available (multiple jobs allowed per employee)
+  for(const job of availableJobs){
+    let best = null;
+    for(const nv of EMPLOYEES){
+      const r = computeScore(nv, job, params);
+      if(!best || r.score > best.score) best = Object.assign({nv, job}, r);
+    }
+    if(best){
+      // simulate outcome: probability of completion depends on phuHop and theluc
+      const probComplete = Math.min(0.95, 0.4 + 0.5 * best.phuHop + 0.1 * best.theluc);
+      const rand = Math.random();
+      let status = (rand <= probComplete) ? 'done' : (rand <= probComplete + 0.15 ? 'doing' : 'none');
+      assignments.push({
+        job: best.job.name,
+        emp: best.nv.name,
+        score: best.score,
+        phuHop: best.phuHop,
+        phuHopAdj: best.phuHopAdj,
+        theluc: best.theluc,
+        status
+      });
+    }
+  }
+  return assignments;
+}
+
+/* ====== Weekly run (Mon-Sat) ====== */
+function runAssignmentWeek(){
+  if(EMPLOYEES.length === 0 || JOBS.length === 0){
+    alert('Chua load nhan vien hoac cong viec. Vui long nhap du lieu truoc.');
+    return;
+  }
+  document.getElementById('runInfo').innerText = 'Dang chay...';
+  // For each day T2..T7 run assignForDay (we can keep same jobs each day)
+  const days = ['Thứ 2','Thứ 3','Thứ 4','Thứ 5','Thứ 6','Thứ 7'];
+  const weekAssignments = []; // array of assignments per day
+  for(const d of days){
+    weekAssignments.push(assignForDay());
+  }
+  // compute per-day performance (%) = (#done / totalJobs) * 100
+  const perfByDay = weekAssignments.map(assigns => {
+    const done = assigns.filter(a=>a.status==='done').length;
+    const total = JOBS.length;
+    return Math.round((done/total) * 100);
+  });
+
+  // compute per-employee weekly performance and status summary
+  const empSummary = EMPLOYEES.map(e=>{
+    // count across week days
+    let done=0, doing=0, none=0;
+    weekAssignments.forEach(dayAssign=>{
+      // find tasks assigned to this employee that day
+      const tasks = dayAssign.filter(a => a.emp === e.name);
+      if(tasks.length===0) { none += 0; } // not assigned that day
+      tasks.forEach(t=>{
+        if(t.status==='done') done++;
+        else if(t.status==='doing') doing++;
+        else none++;
+      });
+    });
+    const totalTasks = done + doing + none;
+    const perf = totalTasks>0 ? Math.round((done/totalTasks)*100) : 0;
+    const state = perf === 100 ? 'Hoan thanh' : (perf>=50 ? 'Dang thuc hien' : 'Chua bat dau');
+    return {name:e.name, done, doing, none, totalTasks, perf, state};
+  });
+
+  // render table and chart
+  renderAssignmentWeek(weekAssignments, days, perfByDay, empSummary);
+  document.getElementById('runInfo').innerText = 'Hoan thanh.';
+}
+
+/* ====== RENDER ====== */
+let weekChart = null;
+function renderAssignmentWeek(weekAssignments, days, perfByDay, empSummary){
+  // assignmentTable: show for current day (Thứ 2) and summary per day counts
+  const wrap = document.getElementById('assignmentTableWrap');
+  wrap.innerHTML = '';
+
+  // show table of assignments for each day in tabs-like simple layout
+  let html = '<div style="overflow:auto;">';
+  for(let di=0; di<days.length; di++){
+    html += `<div style="display:inline-block;vertical-align:top;margin-right:8px">
+      <strong>${days[di]}</strong>
+      <table><tr><th>Job</th><th>Employee</th><th>Skill</th><th>Thể lực</th><th>Score</th><th>Trạng thái</th></tr>`;
+    const assigns = weekAssignments[di];
+    for(const a of assigns){
+      const stCls = a.status==='done' ? 'status-done' : (a.status==='doing' ? 'status-doing' : 'status-none');
+      html += `<tr>
+        <td>${a.job}</td>
+        <td>${a.emp}</td>
+        <td>${(a.phuHop*100).toFixed(0)}%</td>
+        <td>${(a.theluc*100).toFixed(0)}%</td>
+        <td>${(a.score*100).toFixed(1)}</td>
+        <td class="${stCls}">${a.status==='done' ? 'Hoàn thành' : (a.status==='doing' ? 'Đang làm' : 'Chưa hoàn thành')}</td>
+      </tr>`;
+    }
+    html += `</table></div>`;
+  }
+  html += '</div>';
+  wrap.innerHTML = html;
+
+  // summary panel
+  const sumWrap = document.getElementById('summaryWrap');
+  let shtml = '<h4>Tóm tắt nhân viên (tuần)</h4>';
+  shtml += '<table><tr><th>Nhân viên</th><th>Hoàn thành</th><th>Đang</th><th>Chưa</th><th>Tổng công việc</th><th>Hiệu suất</th><th>Trạng thái</th></tr>';
+  for(const e of empSummary){
+    const cls = e.perf===100 ? 'status-done' : (e.perf>=50 ? 'status-doing' : 'status-none');
+    shtml += `<tr><td>${e.name}</td><td>${e.done}</td><td>${e.doing}</td><td>${e.none}</td><td>${e.totalTasks}</td><td>${e.perf}%</td><td class="${cls}">${e.state}</td></tr>`;
+  }
+  shtml += '</table>';
+  sumWrap.innerHTML = shtml;
+
+  // draw chart: perfByDay
+  const ctx = document.getElementById('weekChart').getContext('2d');
+  if(weekChart) weekChart.destroy();
+  weekChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: days,
+      datasets: [{
+        label: 'Hiệu suất (%) - số job hoàn thành / tổng job',
+        data: perfByDay,
+        borderColor: '#1f77b4',
+        backgroundColor: 'rgba(31,119,180,0.15)',
+        fill: true,
+        tension: 0.3,
+        pointRadius:6
+      }]
+    },
+    options: {
+      responsive:true,
+      scales:{ y: { min:0, max:100 } }
+    }
+  });
+}
+
+/* ====== initial sample data (auto-fill) ====== */
+document.getElementById('inputEmployees').value =
+`An;0.8;Phuc vu:0.9,Nau an:0.4,Thu ngan:0.6,Pha che:0.3
+Binh;0.6;Phuc vu:0.5,Nau an:0.8,Thu ngan:0.7,Pha che:0.6
+Chi;0.9;Phuc vu:0.7,Nau an:0.6,Thu ngan:0.9,Pha che:0.5`;
+document.getElementById('inputJobs').value =
+`Phuc vu;10
+Nau an;25
+Thu ngan;8
+Pha che;12
+Bo phan tu van;15`;
+
+/* load sample */
+loadEmployees();
+loadJobs();
+
+function renderAssignmentEmpty(){
+  document.getElementById('assignmentTableWrap').innerHTML = '<div class="small">Chua co ket qua. Nhap du lieu va chay phan cong.</div>';
+  document.getElementById('summaryWrap').innerHTML = '';
+}
+renderAssignmentEmpty();
+
+</script>
+</body>
+</html>
