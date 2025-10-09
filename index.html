@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
   <meta charset="utf-8" />
-  <title>Heuristic - Quan ly nhan su (Demo)</title>
+  <title>Heuristic + ML - Quan ly nhan su (Demo) - Full</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
@@ -23,31 +23,34 @@
     .controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
     textarea{width:100%;height:90px;padding:8px;font-family:monospace}
     .col{flex:1;min-width:240px}
+    .warn{color:#d35400;font-weight:700}
+    #employeeReport{margin-top:12px}
+    .flex-row{display:flex;gap:8px;align-items:center}
   </style>
 </head>
 <body>
-  <h1>Ung dung: Ap dung Heuristic vao quan ly nhan su (quan an) — Demo</h1>
+  <h1>Ung dung: Heuristic + ML trong quan ly nhan su (quan an) — Demo (Full)</h1>
 
   <div class="row">
     <div class="card col">
       <strong>1) Nhap danh sach nhan vien (moi dong):</strong>
-      <div class="small">Format: Ten;theluc(0-1);ky nang theo cong viec job1:score,job2:score,...</div>
-      <textarea id="nhapNhanVien" placeholder="Vi du:\nAn;0.8;Phuc vu:0.9,Nau an:0.4,Thu ngan:0.6"></textarea>
+      <div class="small">Format: Ten[ (new)];theluc(0-1);kyNang theo cong viec job1:score,job2:score,...</div>
+      <textarea id="nhapNhanVien" placeholder="Vi du:\nAn (new);0.6;Phuc vu:0.6,Nau an:0.4,Thu ngan:0.3"></textarea>
       <button onclick="taiNhanVien()">Load nhan vien</button>
       <div id="soNhanVien" class="small"></div>
     </div>
 
     <div class="card col">
       <strong>2) Nhap danh sach cong viec (moi dong):</strong>
-      <div class="small">Format: Ten cong viec;thoi gian(phut)</div>
+      <div class="small">Format: Ten cong viec;thoiGian(phut)</div>
       <textarea id="nhapCongViec" placeholder="Vi du:\nPhuc vu;10\nNau an;25"></textarea>
       <button onclick="taiCongViec()">Load cong viec</button>
       <div id="soCongViec" class="small"></div>
     </div>
 
-    <div class="card" style="min-width:260px">
-      <strong>3) Tham so Heuristic</strong>
-      <div class="small">Diem(i,j) = x*(1/ThoiGian) + y*PhuHopKyNang + z*TheLuc</div>
+    <div class="card" style="min-width:300px">
+      <strong>3) Tham so Heuristic (hoac dung ML)</strong>
+      <div class="small">Diem(i,j) = x*InvNorm + y*PhuHopAdj + z*TheLuc (hoac su dung ML)</div>
       <div style="margin-top:8px">
         <label>Trong so x (thoi gian): <input id="trongSoX" type="number" step="0.05" value="0.5" /></label>
         <label>Trong so y (ky nang): <input id="trongSoY" type="number" step="0.05" value="0.3" /></label>
@@ -56,10 +59,17 @@
       <div style="margin-top:8px">
         <label>Nguong ky nang bat buoc: <input id="nguongKyNang" type="number" step="0.05" value="0.5" /></label>
       </div>
-      <div style="margin-top:6px">
-        <button onclick="phanCongCảTuan()">Chay phan cong cho ca tuan (T2→T7)</button>
+      <div style="margin-top:6px" class="flex-row">
+        <button onclick="phanCongCaTuan()">Chay phan cong tu Thu2 -> Thu7</button>
+        <button onclick="exportWeekCSV()">Xuat CSV (bao cao tuan)</button>
+      </div>
+      <div style="margin-top:6px" class="flex-row">
+        <input type="checkbox" id="useML" /> <label for="useML" class="small" style="display:inline"> Dung ML de tinh score neu co model</label>
+        <button onclick="trainML()">Huấn luyen ML</button>
+        <button onclick="clearTrainData()">Xoa du lieu ML</button>
       </div>
       <div class="small" id="thongTinChay"></div>
+      <div class="small" id="mlInfo"></div>
     </div>
   </div>
 
@@ -72,6 +82,17 @@
     <div class="card col" style="min-width:320px">
       <strong>Thong ke & hieu suat</strong>
       <div id="thongKe"></div>
+
+      <div style="margin-top:12px">
+        <strong>Xem bao cao nhan vien (lich su 7 ngay)</strong>
+        <div class="small">Chon nhan vien de xem chi tiet:</div>
+        <select id="selectEmployee" style="width:100%;padding:6px;margin-top:6px"></select>
+        <div style="margin-top:8px" class="flex-row">
+          <button onclick="showEmployeeReport()">Xem lich su nhan vien</button>
+          <button onclick="updateSkillsReset()">Reset tang ky nang</button>
+        </div>
+        <div id="employeeReport"></div>
+      </div>
     </div>
   </div>
 
@@ -80,12 +101,23 @@
   </div>
 
 <script>
-/* ====== MO HINH DU LIEU ====== */
-let NHAN_VIEN = []; // {ten,theluc, kyNang: {congViec:diem}}
-let CONG_VIEC = []; // {ten, thoiGianMin}
+/* ====== MO HINH DU LIEU & TRANG THAI ====== */
+let NHAN_VIEN = []; // {ten,theluc,kyNang:{job:score}}
+let CONG_VIEC = []; // {ten,thoiGianMin}
+
+// du lieu cho ML
+let TRAIN_DATA = [];
+let MODEL = {w0:0,w1:0,w2:0,w3:0, trained:false};
+
+// luu ket qua phan cong tuan de hien thi chi tiet va xuat CSV
+let LAST_WEEK_ASSIGNMENTS = null; // array of 6 days, each day: array of assignments
+let HISTORY_BY_EMP = {}; // { empName: [day0tasks[], day1tasks[], ...] }
+
+// tham so learning-on-job
+const SKILL_GAIN = 0.04; // neu hoan thanh => tang ky nang len 0.04 moi lan
 
 /* ====== HAM GIUP DO ====== */
-// Chuyen chuoi nhap thanh danh sach nhan vien
+// phan tich nhan vien tu text
 function phanTichNhanVien(text){
   const dong = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
   const arr = [];
@@ -104,7 +136,7 @@ function phanTichNhanVien(text){
   return arr;
 }
 
-// Chuyen chuoi nhap thanh danh sach cong viec
+// phan tich cong viec
 function phanTichCongViec(text){
   const dong = text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l);
   const arr = [];
@@ -118,11 +150,12 @@ function phanTichCongViec(text){
   return arr;
 }
 
-/* ====== HANH DONG UI ====== */
+/* ===== UI actions ===== */
 function taiNhanVien(){
   const raw = document.getElementById('nhapNhanVien').value;
   NHAN_VIEN = phanTichNhanVien(raw);
   document.getElementById('soNhanVien').innerText = "Da load " + NHAN_VIEN.length + " nhan vien";
+  populateEmployeeSelect();
   renderBangRong();
 }
 function taiCongViec(){
@@ -132,8 +165,15 @@ function taiCongViec(){
   renderBangRong();
 }
 
-/* ====== Heuristic ====== */
-function tinhDiem(nv, congViec, params){
+/* ===== Heuristic & ML predict ====== */
+function sigmoid(z){ return 1 / (1 + Math.exp(-z)); }
+function mlPredict(invNorm, phuHop, theluc){
+  const m = MODEL;
+  const z = m.w0 + m.w1*invNorm + m.w2*phuHop + m.w3*theluc;
+  return sigmoid(z);
+}
+
+function computeScore(nv, congViec, params){
   const invTimes = CONG_VIEC.map(j=>1/j.thoiGianMin);
   const minInv = Math.min(...invTimes), maxInv = Math.max(...invTimes);
   let inv = 1/congViec.thoiGianMin;
@@ -145,12 +185,18 @@ function tinhDiem(nv, congViec, params){
   let phuHopAdj = phuHop;
   if(phuHop < params.nguongKyNang) phuHopAdj *= 0.7;
 
-  const score = params.x * invNorm + params.y * phuHopAdj + params.z * theluc;
-  return {score, invNorm, phuHop, phuHopAdj, theluc};
+  const useML = document.getElementById('useML').checked;
+  if(useML && MODEL.trained){
+    const prob = mlPredict(invNorm, phuHop, theluc);
+    return {score: prob, invNorm, phuHop, phuHopAdj, theluc, usedML:true};
+  } else {
+    const score = params.x * invNorm + params.y * phuHopAdj + params.z * theluc;
+    return {score, invNorm, phuHop, phuHopAdj, theluc, usedML:false};
+  }
 }
 
-/* ====== Phan cong trong ngay ====== */
-function phanCongTrongNgay(){
+/* ====== phan cong 1 ngay VA cap nhat skill, luu lich su ====== */
+function phanCongTrongNgay(dayIndex, addTrainSamples=true){
   const params = {
     x: parseFloat(document.getElementById('trongSoX').value) || 0.5,
     y: parseFloat(document.getElementById('trongSoY').value) || 0.3,
@@ -159,23 +205,59 @@ function phanCongTrongNgay(){
   };
   const phanCong = [];
   const congViecSanCo = CONG_VIEC.slice();
+
+  // khoi tao history day
+  for(const nv of NHAN_VIEN){
+    if(!HISTORY_BY_EMP[nv.ten]) HISTORY_BY_EMP[nv.ten] = Array(6).fill(null).map(()=>[]);
+  }
+
   for(const cv of congViecSanCo){
-    let totNhat = null;
+    let best = null;
     for(const nv of NHAN_VIEN){
-      const r = tinhDiem(nv,cv,params);
-      if(!totNhat || r.score > totNhat.score) totNhat = Object.assign({nv, cv}, r);
+      const r = computeScore(nv, cv, params);
+      if(!best || r.score > best.score) best = Object.assign({nv,cv}, r);
     }
-    if(totNhat){
-      const probHoanThanh = Math.min(0.95, 0.4 + 0.5 * totNhat.phuHop + 0.1 * totNhat.theluc);
+    if(best){
+      // ground-truth probability (dung de generate label)
+      const probHoanThanh = Math.min(0.95, 0.35 + 0.5 * best.phuHop + 0.15 * best.theluc);
       const rand = Math.random();
-      let trangThai = (rand <= probHoanThanh) ? 'done' : (rand <= probHoanThanh + 0.15 ? 'doing' : 'none');
+      let trangThai = (rand <= probHoanThanh) ? 'done' : (rand <= probHoanThanh + 0.12 ? 'doing' : 'none');
+
+      // thu thap mau cho ML
+      if(addTrainSamples){
+        TRAIN_DATA.push({
+          x1: best.invNorm,
+          x2: best.phuHop,
+          x3: best.theluc,
+          y: (trangThai==='done')?1:0
+        });
+      }
+
+      // neu hoan thanh -> tang ky nang (learning on the job)
+      if(trangThai==='done'){
+        const jobName = best.cv.ten;
+        const prev = best.nv.kyNang[jobName] !== undefined ? best.nv.kyNang[jobName] : 0;
+        const increased = Math.min(1.0, prev + SKILL_GAIN);
+        best.nv.kyNang[jobName] = increased;
+      }
+
+      // luu lich su cho nhan vien vao HISTORY_BY_EMP
+      HISTORY_BY_EMP[best.nv.ten][dayIndex].push({
+        dayIndex,
+        job: best.cv.ten,
+        status: trangThai,
+        score: best.score,
+        phuHopBefore: best.phuHop, // note: phuHopBefore is value before possible increment above
+        phuHopAfter: best.nv.kyNang[best.cv.ten]
+      });
+
       phanCong.push({
-        congViec: totNhat.cv.ten,
-        nhanVien: totNhat.nv.ten,
-        score: totNhat.score,
-        phuHop: totNhat.phuHop,
-        phuHopAdj: totNhat.phuHopAdj,
-        theluc: totNhat.theluc,
+        congViec: best.cv.ten,
+        nhanVien: best.nv.ten,
+        score: best.score,
+        phuHop: best.phuHop,
+        phuHopAdj: best.phuHopAdj,
+        theluc: best.theluc,
         trangThai
       });
     }
@@ -183,18 +265,25 @@ function phanCongTrongNgay(){
   return phanCong;
 }
 
-/* ====== Chay phan cong ca tuan ====== */
-function phanCongCảTuan(){
+/* ====== Chay phan cong ca tuan va luu data ====== */
+function phanCongCaTuan(){
   if(NHAN_VIEN.length===0 || CONG_VIEC.length===0){
-    alert('Chua load du lieu nhan vien hoac cong viec.');
+    alert('Chua load nhan vien hoac cong viec. Vui long nhap du lieu.');
     return;
   }
+  // reset history structure
+  HISTORY_BY_EMP = {};
   document.getElementById('thongTinChay').innerText = 'Dang chay...';
   const ngayTrongTuan = ['Thu 2','Thu 3','Thu 4','Thu 5','Thu 6','Thu 7'];
   const phanCongTuan = [];
-  for(const n of ngayTrongTuan){
-    phanCongTuan.push(phanCongTrongNgay());
+
+  for(let d=0; d<ngayTrongTuan.length; d++){
+    // addTrainSamples = true de thu thap mau cho ML va cap nhat skill
+    phanCongTuan.push(phanCongTrongNgay(d, true));
   }
+
+  // luu global de xuat csv va hien thi lich su
+  LAST_WEEK_ASSIGNMENTS = phanCongTuan;
 
   const hieuSuatTheoNgay = phanCongTuan.map(pc=>{
     const hoanThanh = pc.filter(a=>a.trangThai==='done').length;
@@ -213,16 +302,24 @@ function phanCongCảTuan(){
     });
     const tongTask = done+doing+none;
     const hieuSuat = tongTask>0 ? Math.round((done/tongTask)*100) : 0;
-    const trangThai = hieuSuat===100 ? 'Hoan thanh' : (hieuSuat>=50 ? 'Dang thuc hien' : 'Chua bat dau');
-    return {ten:nv.ten,done,doing,none,tongTask,hieuSuat,trangThai};
+    const trangThai = hieuSuat===100 ? 'Hoan thanh' : (hieuSuat>=50 ? 'Dang thuc hien' : 'Chua hoan thanh');
+
+    // neu la nhan vien moi (ten chua "(new)") va hieu suat < 50% -> thong bao huong dan
+    let huongDan = '';
+    if(nv.ten.toLowerCase().includes('(new)') && hieuSuat < 50){
+      huongDan = '⚠️ Nhan vien moi can duoc ho tro / huong dan them.';
+    }
+
+    return {ten:nv.ten,done,doing,none,tongTask,hieuSuat,trangThai,huongDan};
   });
 
   renderBangPhanCong(phanCongTuan,ngayTrongTuan,hieuSuatTheoNgay,tongKetNhanVien);
   document.getElementById('thongTinChay').innerText = 'Hoan thanh.';
+  document.getElementById('mlInfo').innerText = `Du lieu huan luyen hien co: ${TRAIN_DATA.length} mau. Model da train: ${MODEL.trained ? 'Co' : 'Chua'}.`;
 }
 
-/* ====== RENDER ====== */
-let bieuDoTuan = null;
+/* ====== Render ket qua + chart ====== */
+let chartWeek = null;
 function renderBangPhanCong(pcTuan,ngay,hieuSuat,tongKet){
   const wrap = document.getElementById('bangPhanCong');
   wrap.innerHTML = '';
@@ -231,7 +328,7 @@ function renderBangPhanCong(pcTuan,ngay,hieuSuat,tongKet){
   for(let i=0;i<ngay.length;i++){
     html += `<div style="display:inline-block;vertical-align:top;margin-right:8px">
       <strong>${ngay[i]}</strong>
-      <table><tr><th>Công việc</th><th>Nhân viên</th><th>Kỹ năng</th><th>Thể lực</th><th>Score</th><th>Trạng thái</th></tr>`;
+      <table><tr><th>Cong viec</th><th>Nhan vien</th><th>Ky nang</th><th>The luc</th><th>Score</th><th>Trang thai</th></tr>`;
     const assigns = pcTuan[i];
     for(const a of assigns){
       const cls = a.trangThai==='done' ? 'status-done' : (a.trangThai==='doing' ? 'status-doing' : 'status-none');
@@ -255,13 +352,16 @@ function renderBangPhanCong(pcTuan,ngay,hieuSuat,tongKet){
   for(const e of tongKet){
     const cls = e.hieuSuat===100 ? 'status-done' : (e.hieuSuat>=50 ? 'status-doing' : 'status-none');
     shtml += `<tr><td>${e.ten}</td><td>${e.done}</td><td>${e.doing}</td><td>${e.none}</td><td>${e.tongTask}</td><td>${e.hieuSuat}%</td><td class="${cls}">${e.trangThai}</td></tr>`;
+    if(e.huongDan){
+      shtml += `<tr><td colspan="7" class="warn">${e.huongDan}</td></tr>`;
+    }
   }
   shtml += '</table>';
   sumWrap.innerHTML = shtml;
 
   const ctx = document.getElementById('bieuDoTuan').getContext('2d');
-  if(bieuDoTuan) bieuDoTuan.destroy();
-  bieuDoTuan = new Chart(ctx, {
+  if(chartWeek) chartWeek.destroy();
+  chartWeek = new Chart(ctx, {
     type: 'line',
     data: {
       labels: ngay,
@@ -282,15 +382,123 @@ function renderBangPhanCong(pcTuan,ngay,hieuSuat,tongKet){
   });
 }
 
-function renderBangRong(){
-  document.getElementById('bangPhanCong').innerHTML = '<div class="small">Chua co ket qua. Nhap du lieu va chay phan cong.</div>';
-  document.getElementById('thongKe').innerHTML = '';
+/* ====== Employee report UI ====== */
+function populateEmployeeSelect(){
+  const sel = document.getElementById('selectEmployee');
+  sel.innerHTML = '';
+  for(const nv of NHAN_VIEN){
+    const opt = document.createElement('option');
+    opt.value = nv.ten;
+    opt.innerText = nv.ten;
+    sel.appendChild(opt);
+  }
 }
 
-/* ====== Du lieu mau ====== */
+function showEmployeeReport(){
+  if(!LAST_WEEK_ASSIGNMENTS){
+    alert('Chua co ket qua tuan. Vui long chay "Chay phan cong tuan" truoc.');
+    return;
+  }
+  const name = document.getElementById('selectEmployee').value;
+  if(!name) return;
+  const days = ['Thu 2','Thu 3','Thu 4','Thu 5','Thu 6','Thu 7'];
+  const wrap = document.getElementById('employeeReport');
+  let html = `<h4>Bao cao chi tiet - ${name}</h4>`;
+  html += '<table><tr><th>Ngay</th><th>Cong viec</th><th>Trang thai</th><th>PhuHop(before)</th><th>PhuHop(after)</th><th>Score</th></tr>';
+  const history = HISTORY_BY_EMP[name] || Array(6).fill(null).map(()=>[]);
+  for(let d=0; d<days.length; d++){
+    const tasks = history[d];
+    if(tasks && tasks.length>0){
+      for(const t of tasks){
+        html += `<tr><td>${days[d]}</td><td>${t.job}</td><td class="${t.status==='done'?'status-done':(t.status==='doing'?'status-doing':'status-none')}">${t.status==='done'?'Hoan thanh':(t.status==='doing'?'Dang lam':'Chua hoan thanh')}</td><td>${(t.phuHopBefore*100).toFixed(0)}%</td><td>${(t.phuHopAfter*100).toFixed(0)}%</td><td>${(t.score*100).toFixed(1)}</td></tr>`;
+      }
+    } else {
+      html += `<tr><td>${days[d]}</td><td colspan="5">Khong co cong viec</td></tr>`;
+    }
+  }
+  html += '</table>';
+  wrap.innerHTML = html;
+}
+
+/* ====== CSV export ====== */
+function exportWeekCSV(){
+  if(!LAST_WEEK_ASSIGNMENTS){
+    alert('Khong co du lieu tuan de xuat. Vui long chay phan cong truoc.');
+    return;
+  }
+  const days = ['Thu 2','Thu 3','Thu 4','Thu 5','Thu 6','Thu 7'];
+  const rows = [];
+  // header
+  rows.push(['Ngay','Nhan vien','Cong viec','Trang thai','PhuHop(before)','PhuHop(after)','Score']);
+  // use HISTORY_BY_EMP to output
+  for(const nvName in HISTORY_BY_EMP){
+    const history = HISTORY_BY_EMP[nvName];
+    for(let d=0; d<history.length; d++){
+      const tasks = history[d];
+      if(tasks && tasks.length>0){
+        for(const t of tasks){
+          rows.push([days[d], nvName, t.job, t.status, (t.phuHopBefore).toFixed(3), (t.phuHopAfter).toFixed(3), (t.score).toFixed(4)]);
+        }
+      } else {
+        rows.push([days[d], nvName, '', 'no_task', '', '', '']);
+      }
+    }
+  }
+  // convert to CSV string
+  const csvContent = rows.map(r => r.map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(',')).join('\r\n');
+  const blob = new Blob([csvContent], {type: 'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const now = new Date();
+  const fname = `bao_cao_tuan_${now.getFullYear()}-${now.getMonth()+1}-${now.getDate()}.csv`;
+  a.download = fname;
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ====== ML: training logistic regression (SGD) ====== */
+function clearTrainData(){
+  TRAIN_DATA = [];
+  MODEL = {w0:0,w1:0,w2:0,w3:0, trained:false};
+  document.getElementById('mlInfo').innerText = 'Da xoa du lieu huan luyen va reset model.';
+}
+
+function trainML(){
+  if(TRAIN_DATA.length < 10){
+    if(!confirm('Du lieu huan luyen it (<10 mau). Ban van muon tiep tuc?')) return;
+  }
+  let w0 = 0, w1 = 0, w2 = 0, w3 = 0;
+  const lr = 0.5;
+  const epochs = 200;
+  for(let ep=0; ep<epochs; ep++){
+    for(let i=TRAIN_DATA.length-1;i>0;i--){
+      const j = Math.floor(Math.random()*(i+1));
+      const tmp = TRAIN_DATA[i]; TRAIN_DATA[i]=TRAIN_DATA[j]; TRAIN_DATA[j]=tmp;
+    }
+    for(const sample of TRAIN_DATA){
+      const x1 = sample.x1, x2 = sample.x2, x3 = sample.x3, y=sample.y;
+      const z = w0 + w1*x1 + w2*x2 + w3*x3;
+      const pred = 1/(1+Math.exp(-z));
+      const err = pred - y;
+      w0 -= lr * err * pred * (1-pred);
+      w1 -= lr * err * pred * (1-pred) * x1;
+      w2 -= lr * err * pred * (1-pred) * x2;
+      w3 -= lr * err * pred * (1-pred) * x3;
+    }
+  }
+  MODEL = {w0,w1,w2,w3, trained:true};
+  document.getElementById('mlInfo').innerText = `Da huan luyen ML. So mau = ${TRAIN_DATA.length}. Weights: ${w1.toFixed(3)},${w2.toFixed(3)},${w3.toFixed(3)}.`;
+  console.log('MODEL', MODEL);
+}
+
+/* ====== sample data mac dinh ====== */
 document.getElementById('nhapNhanVien').value =
-`An;0.8;Phuc vu:0.9,Nau an:0.4,Thu ngan:0.6,Pha che:0.3
-Binh;0.6;Phuc vu:0.5,Nau an:0.8,Thu ngan:0.7,Pha che:0.6
+`An (new);0.6;Phuc vu:0.6,Nau an:0.4,Thu ngan:0.3
+Binh;0.7;Phuc vu:0.5,Nau an:0.8,Thu ngan:0.7,Pha che:0.6
 Chi;0.9;Phuc vu:0.7,Nau an:0.6,Thu ngan:0.9,Pha che:0.5`;
 document.getElementById('nhapCongViec').value =
 `Phuc vu;10
@@ -302,6 +510,23 @@ Bo phan tu van;15`;
 taiNhanVien();
 taiCongViec();
 renderBangRong();
+
+/* ====== ham render rong ====== */
+function renderBangRong(){
+  document.getElementById('bangPhanCong').innerHTML = '<div class="small">Chua co ket qua. Nhap du lieu va chay phan cong.</div>';
+  document.getElementById('thongKe').innerHTML = '';
+  document.getElementById('mlInfo').innerText = `So mau huan luyen: ${TRAIN_DATA.length}. Model trained: ${MODEL.trained ? 'Co' : 'Chua'}.`;
+}
+
+/* ====== Reset skills (de test) ====== */
+function updateSkillsReset(){
+  if(!confirm('Ban chac chan muon reset toan bo ky nang ve gia tri ban dau (0)?')) return;
+  for(const nv of NHAN_VIEN){
+    // set all skills to 0.2 as default
+    for(const k in nv.kyNang) nv.kyNang[k] = 0.2;
+  }
+  alert('Da reset ky nang.');
+}
 </script>
 </body>
 </html>
