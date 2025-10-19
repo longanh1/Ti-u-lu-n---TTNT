@@ -19,13 +19,15 @@
     .status-done{color:green;font-weight:600}
     .status-doing{color:orange;font-weight:600}
     .status-none{color:#c0392b;font-weight:600}
-    #chart-wrap{max-width:780px;margin-top:12px}
+    #chart-wrap{max-width:980px;margin-top:12px}
+    #accuracy-wrap{max-width:980px;margin-top:20px}
     .controls{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
     textarea{width:100%;height:90px;padding:8px;font-family:monospace}
     .col{flex:1;min-width:240px}
     .warn{color:#d35400;font-weight:700}
     #employeeReport{margin-top:12px}
     .flex-row{display:flex;gap:8px;align-items:center}
+    .muted{color:#666;font-size:12px}
   </style>
 </head>
 <body>
@@ -36,7 +38,10 @@
       <strong>1) Nhap danh sach nhan vien (moi dong):</strong>
       <div class="small">Format: Ten[ (new)];theluc(0-1);kyNang theo cong viec job1:score,job2:score,...</div>
       <textarea id="nhapNhanVien" placeholder="Vi du:\nAn (new);0.6;Phuc vu:0.6,Nau an:0.4,Thu ngan:0.3"></textarea>
-      <button onclick="taiNhanVien()">Load nhan vien</button>
+      <div style="margin-top:8px" class="flex-row">
+        <button onclick="taiNhanVien()">Load nhan vien</button>
+        <button onclick="clearNhanVien()">Xoa tat ca nhan vien</button>
+      </div>
       <div id="soNhanVien" class="small"></div>
     </div>
 
@@ -44,7 +49,10 @@
       <strong>2) Nhap danh sach cong viec (moi dong):</strong>
       <div class="small">Format: Ten cong viec;thoiGian(phut)</div>
       <textarea id="nhapCongViec" placeholder="Vi du:\nPhuc vu;10\nNau an;25"></textarea>
-      <button onclick="taiCongViec()">Load cong viec</button>
+      <div style="margin-top:8px" class="flex-row">
+        <button onclick="taiCongViec()">Load cong viec</button>
+        <button onclick="clearCongViec()">Xoa tat ca cong viec</button>
+      </div>
       <div id="soCongViec" class="small"></div>
     </div>
 
@@ -65,8 +73,9 @@
       </div>
       <div style="margin-top:6px" class="flex-row">
         <input type="checkbox" id="useML" /> <label for="useML" class="small" style="display:inline"> Dung ML de tinh score neu co model</label>
-        <button onclick="trainML()">Huấn luyen ML</button>
+        <button onclick="trainML()">Huan luyen ML</button>
         <button onclick="clearTrainData()">Xoa du lieu ML</button>
+        <button onclick="testModelAccuracy(50)">Kiem tra do chinh xac ML (50 lan)</button>
       </div>
       <div class="small" id="thongTinChay"></div>
       <div class="small" id="mlInfo"></div>
@@ -98,6 +107,16 @@
 
   <div id="chart-wrap" class="card">
     <canvas id="bieuDoTuan"></canvas>
+  </div>
+
+  <div id="accuracy-wrap" class="card" style="margin-top:12px">
+    <strong>Danh gia do chinh xac he thong (50 lan mo phỏng ngay)</strong>
+    <div class="small muted">Chay 50 lan phan cong trong ngay (mo phong), tra ve do chinh xac tung lan, trung binh va do lech chuan.</div>
+    <div style="margin-top:8px">
+      <button onclick="chay50Lan()">Chay 50 lan mo phong</button>
+    </div>
+    <div id="ketQua50" class="small" style="margin-top:8px"></div>
+    <canvas id="bieuDoAccuracy" height="160" style="margin-top:10px"></canvas>
   </div>
 
 <script>
@@ -164,6 +183,8 @@ function taiCongViec(){
   document.getElementById('soCongViec').innerText = "Da load " + CONG_VIEC.length + " cong viec";
   renderBangRong();
 }
+function clearNhanVien(){ NHAN_VIEN=[]; document.getElementById('soNhanVien').innerText='Da xoa'; populateEmployeeSelect(); renderBangRong(); }
+function clearCongViec(){ CONG_VIEC=[]; document.getElementById('soCongViec').innerText='Da xoa'; renderBangRong(); }
 
 /* ===== Heuristic & ML predict ====== */
 function sigmoid(z){ return 1 / (1 + Math.exp(-z)); }
@@ -175,8 +196,8 @@ function mlPredict(invNorm, phuHop, theluc){
 
 function computeScore(nv, congViec, params){
   const invTimes = CONG_VIEC.map(j=>1/j.thoiGianMin);
-  const minInv = Math.min(...invTimes), maxInv = Math.max(...invTimes);
-  let inv = 1/congViec.thoiGianMin;
+  const minInv = Math.min(...invTimes || [1]), maxInv = Math.max(...invTimes || [1]);
+  let inv = 1/(congViec.thoiGianMin || 1);
   let invNorm = (maxInv - minInv) < 1e-9 ? 1 : (inv - minInv) / (maxInv - minInv);
 
   const phuHop = nv.kyNang[congViec.ten] !== undefined ? nv.kyNang[congViec.ten] : 0;
@@ -495,6 +516,90 @@ function trainML(){
   console.log('MODEL', MODEL);
 }
 
+/* ====== Test do chinh xac ML (dung khi model da duoc huan luyen) ====== */
+function testModelAccuracy(runs = 50){
+  if(!MODEL.trained){
+    alert('Model chua duoc huan luyen. Vui long train truoc.');
+    return;
+  }
+  // thu 50 lan test: ta se phat sinh cac vector (invNorm, phuHop, theluc) ngau nhien
+  const results = [];
+  for(let i=0;i<runs;i++){
+    // phat sinh ngau nhien (0..1)
+    const invNorm = Math.random();
+    const phuHop = Math.random();
+    const theluc = Math.random();
+    const prob = mlPredict(invNorm, phuHop, theluc);
+    const pred = prob >= 0.5 ? 1 : 0;
+    // ground truth doi voi test mo phong: su dung heuristic tren phuHop & theluc
+    const real = (phuHop*0.6 + theluc*0.4) > 0.5 ? 1 : 0;
+    results.push(pred === real ? 1 : 0);
+  }
+
+  const accuracy = results.reduce((a,b)=>a+b,0)/results.length;
+  // hien thi
+  document.getElementById('mlInfo').innerHTML += `<br><b>Do chinh xac ML (50 lan):</b> ${(accuracy*100).toFixed(2)}%`;
+
+  // ve bieu do nho
+  const existing = document.getElementById('mlAccuracyCanvas');
+  if(existing) existing.remove();
+  const c = document.createElement('canvas');
+  c.id = 'mlAccuracyCanvas';
+  c.height = 120;
+  document.getElementById('chart-wrap').appendChild(c);
+  const ctx = c.getContext('2d');
+  new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: results.map((_,i)=>`T${i+1}`),
+      datasets:[{
+        label:'Ket qua test (1=dung,0=sai)',
+        data: results,
+        backgroundColor: results.map(v => v? 'rgba(46,204,113,0.8)':'rgba(231,76,60,0.8)')
+      }]
+    },
+    options:{scales:{y:{min:0,max:1,ticks:{stepSize:1}}},plugins:{legend:{display:false}}}
+  });
+}
+
+/* ====== CHAY 50 LAN MO PHONG DO CHINH XAC HEURISTIC ====== */
+let accuracyChart = null;
+function chay50Lan(){
+  if(NHAN_VIEN.length===0 || CONG_VIEC.length===0){
+    alert('Vui long load nhan vien va cong viec truoc khi chay.');
+    return;
+  }
+  const runs = 50;
+  const arr = [];
+  for(let i=0;i<runs;i++){
+    // phan cong mot ngay (khong cap nhat skill va khong thu mau ML) -> de tinh accuracy trong 1 lan
+    // de giam anh huong qua nhieu, goi phanCongTrongNgay(dayIndex, addTrainSamples=false)
+    // tuy nhien ham phanCongTrongNgay thuoc code hien tai yeu cau dayIndex, nen goi voi dayIndex=0 va addTrainSamples=false
+    const pc = phanCongTrongNgay(0, false); // khong thu mau, khong cap nhat skill
+    const acc = pc.filter(a=>a.trangThai==='done').length / CONG_VIEC.length;
+    arr.push(acc*100);
+  }
+  const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
+  const std = Math.sqrt(arr.map(v=>Math.pow(v-mean,2)).reduce((a,b)=>a+b,0)/arr.length);
+
+  document.getElementById('ketQua50').innerText = `Do chinh xac trung binh sau ${runs} lan: ${mean.toFixed(2)}% | Do lech chuan: ${std.toFixed(2)}%`;
+
+  // ve bieu do
+  const ctx = document.getElementById('bieuDoAccuracy').getContext('2d');
+  if(accuracyChart) accuracyChart.destroy();
+  accuracyChart = new Chart(ctx, {
+    type:'bar',
+    data:{
+      labels: Array.from({length:runs},(_,i)=>`Lan ${i+1}`),
+      datasets:[
+        { label: 'Do chinh xac (%) moi lan', data: arr, backgroundColor:'rgba(54,162,235,0.7)' },
+        { label: 'Trung binh', data: Array(runs).fill(mean), type:'line', borderColor:'red', borderWidth:2, pointRadius:0 }
+      ]
+    },
+    options:{scales:{y:{min:0,max:100}}}
+  });
+}
+
 /* ====== sample data mac dinh ====== */
 document.getElementById('nhapNhanVien').value =
 `An (new);0.6;Phuc vu:0.6,Nau an:0.4,Thu ngan:0.3
@@ -520,9 +625,8 @@ function renderBangRong(){
 
 /* ====== Reset skills (de test) ====== */
 function updateSkillsReset(){
-  if(!confirm('Ban chac chan muon reset toan bo ky nang ve gia tri ban dau (0)?')) return;
+  if(!confirm('Ban chac chan muon reset toan bo ky nang ve gia tri ban dau (0.2)?')) return;
   for(const nv of NHAN_VIEN){
-    // set all skills to 0.2 as default
     for(const k in nv.kyNang) nv.kyNang[k] = 0.2;
   }
   alert('Da reset ky nang.');
